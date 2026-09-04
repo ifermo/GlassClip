@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.panelController.show()
             }
         }
-        // 调试/自动化参数（黑线框回归，见 debug/run-loop.sh）：弹出面板
+        // 调试/自动化参数（黑线框回归用）：弹出面板
         // 并截取窗口合成图像（带阴影与无阴影各一张）后退出。需要屏幕
         // 录制权限（首次运行弹系统授权框）。
         if ProcessInfo.processInfo.arguments.contains("--shot-panel") {
@@ -130,8 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// NSStatusBar 只返回弱引用对象，无人持有时图标即刻消失。
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        // 与 App 图标同源的模板图（StatusBarIcon.png，由 debug/make-statusbar-icon.swift
-        // 从 Resources/AppIcon.png 派生）；isTemplate = true 时系统按菜单栏
+        // 与 App 图标同源的模板图（StatusBarIcon.png，从 Resources/AppIcon.png
+        // 派生，位图已入库不再需要重新生成）；isTemplate = true 时系统按菜单栏
         // 亮暗自动反转。资源缺失时退回 SF Symbol，状态栏不至于无图标。
         item.button?.image = Self.statusBarTemplateImage()
             ?? NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "GlassClip")
@@ -246,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow = nil
     }
 
-    /// 调试钩子（--shot-panel，debug/run-loop.sh 专用）：弹出面板（强制
+    /// 调试钩子（--shot-panel，供外部脚本驱动截图回归）：弹出面板（强制
     /// 不透明，规避脚本化启动时淡入动画卡住的现象），再用 screencapture
     /// 按窗口 id 截取合成图像——无阴影版（窗口本体）与带阴影版（用户所
     /// 见）各一张，写完即退出。需要屏幕录制权限（首次运行弹系统授权框）。

@@ -1,7 +1,7 @@
 // StatusBarIconTests.swift — 状态栏图标资产与模板属性回归测试。
 //
 // 锁定的行为：状态栏用与 App 图标同源的模板图（StatusBarIcon.png，
-// 由 debug/make-statusbar-icon.swift 从 Resources/AppIcon.png 派生）。
+// 从 Resources/AppIcon.png 派生，位图已入库）。
 // 三个关键属性必须同时成立：
 // 1. 资源随 target 打包（Bundle.module 可寻址）——防 Package.swift 的
 //    resources 声明被移除或资源文件被改名后静默退回 SF Symbol；

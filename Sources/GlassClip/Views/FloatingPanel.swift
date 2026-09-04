@@ -143,7 +143,7 @@ final class PanelController: NSObject {
     /// - hasShadow = false：必须关。borderless 透明窗口的原生阴影由
     ///   AppKit 按窗口矩形边界生成，不认玻璃视图的圆角裁切，会在
     ///   圆角玻璃外沿糊出一圈紧贴边缘的黑色硬线框（黑框 bug 根因，
-    ///   debug/ 截图回路逐像素证实 + FloatingPanelShadowTests 回归锁定）。
+    ///   曾由窗口截图逐像素差分证实，现由 FloatingPanelShadowTests 锁定）。
     ///   需要投影层次时在合成层自绘，不得重开窗口级阴影；
     /// - collectionBehavior：所有 Space 可见（canJoinAllSpaces）、支持
     ///   全屏应用上方辅助显示（fullScreenAuxiliary）、不参与 ⌘` 窗口循环
