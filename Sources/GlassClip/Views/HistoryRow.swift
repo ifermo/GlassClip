@@ -5,8 +5,9 @@
 // 选中/悬停的底色都走 Color.primary 低透明度叠加——在玻璃材质上
 // 浅色/深色模式自动成立，无需两套色值。
 //
-// 本文件还承载两个 @MainActor 内存缓存（IconCache / RichTextCache）：
-// 列表每帧渲染几十行，磁盘读图与 RTF 解析必须走缓存。
+// 行渲染依赖的两个内存缓存（IconCache / RichTextCache）在
+// Services/MemoryCaches.swift（RichTextCache 的写入方 HistoryController
+// 也在 Services 层，缓存声明在被依赖的一侧）。
 
 import AppKit
 import SwiftUI
@@ -141,26 +142,6 @@ private struct AppIconView: View {
     }
 }
 
-// MARK: - 图片缓存
-
-/// 路径 → NSImage 的进程内缓存（列表滚动时避免反复磁盘解码）。
-///
-/// 淘汰策略刻意简单：超过 200 张整体清空（下次按需重读）。
-/// 剪贴板工具的生命周期内这个量级完全够用，不值得引入 LRU。
-@MainActor
-enum IconCache {
-    private static var cache: [String: NSImage] = [:]
-
-    /// 取缓存图；未命中读盘并入缓存，读盘失败返回 nil（调用方走占位图）。
-    static func image(at path: String) -> NSImage? {
-        if let cached = cache[path] { return cached }
-        guard let image = NSImage(contentsOfFile: path) else { return nil }
-        if cache.count > 200 { cache.removeAll() }
-        cache[path] = image
-        return image
-    }
-}
-
 // MARK: - 缩略图
 
 /// 图片条目的缩略图（32px 圆角，描边让浅色图在玻璃上可辨）。
@@ -200,26 +181,5 @@ private struct RichTextLine: NSViewRepresentable {
 
     func updateNSView(_ field: NSTextField, context: Context) {
         field.attributedStringValue = RichTextCache.attributedString(itemID: itemID, fallback: previewText)
-    }
-}
-
-/// 富文本解析结果缓存（UUID → NSAttributedString）。
-///
-/// 写入时机：HistoryController.primeRichTextCache 预热最近 60 条。
-/// 未命中时退化为纯文本 fallback（不现场解析 RTF——那会卡滚动）。
-@MainActor
-enum RichTextCache {
-    private static var cache: [UUID: NSAttributedString] = [:]
-
-    /// 取缓存富文本；未命中返回换行折叠后的纯文本串。
-    static func attributedString(itemID: UUID, fallback: String) -> NSAttributedString {
-        if let cached = cache[itemID] { return cached }
-        return NSAttributedString(string: fallback.replacingOccurrences(of: "\n", with: " "))
-    }
-
-    /// 写入缓存；超 100 条整体清空（与 IconCache 同款简单淘汰）。
-    static func prime(_ itemID: UUID, _ attributed: NSAttributedString) {
-        if cache.count > 100 { cache.removeAll() }
-        cache[itemID] = attributed
     }
 }
