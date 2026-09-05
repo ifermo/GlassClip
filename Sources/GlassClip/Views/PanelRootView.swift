@@ -1,9 +1,10 @@
-// PanelRootView.swift — 面板的 SwiftUI 根视图：搜索、Tab、列表、预览分栏、
-// 键盘导航。设计共识中的交互规格（键盘表、Esc 分层退出、打即搜、
-// Space 预览、Tab 切换）全部在本文件实现。
+// PanelRootView.swift — 面板的 SwiftUI 根视图：搜索、Tab + 分类 chips、
+// 列表、预览分栏、键盘导航。设计共识中的交互规格（键盘表、Esc 分层退出、
+// 打即搜、Space 预览、Tab 轮换分类 / ⇧Tab 切 Tab）全部在本文件实现。
 //
-// 结构：顶部搜索条 → 全部/收藏 Tab → 发丝线 → 内容区（空态 / 列表
-// （+ 可选右侧 252px 预览分栏））。
+// 结构：顶部搜索条 → 全部/收藏 Tab ┃ 分类 chips（单选可取消，与 Tab 正交
+// 叠加；分类是 ItemCategory 的派生属性，不入库）→ 发丝线 → 内容区
+// （空态 / 列表（+ 可选右侧 252px 预览分栏））。
 //
 // 高度自适应：本视图实测 chrome 与列表内容高度、经 onHeightChange 上报；
 // min/max 与屏幕钳位全部在 PanelController，本视图不知道任何尺寸常量。
@@ -32,6 +33,8 @@ struct PanelRootView: View {
     @State private var query = ""
     /// 当前 Tab。
     @State private var segment: Segment = .all
+    /// 当前分类过滤（nil = 不过滤；与 Tab 正交叠加，Tab 轮换的目标域）。
+    @State private var category: ItemCategory?
     /// 键盘/点击选中的行（nil = 无选中，validateSelection 会补上首行）。
     @State private var selectedID: UUID?
     /// 预览分栏展示的条目（nil = 分栏收起）。
@@ -60,9 +63,9 @@ struct PanelRootView: View {
 
     // MARK: 派生列表
 
-    /// 搜索 + Tab 过滤后的基础列表（逻辑见 HistoryListModel，逐字搬运）。
+    /// 搜索 + Tab + 分类过滤后的基础列表（逻辑见 HistoryListModel，逐字搬运）。
     private var filtered: [ClipboardItem] {
-        HistoryListModel.filtered(items: controller.items, query: query, segment: segment)
+        HistoryListModel.filtered(items: controller.items, query: query, segment: segment, category: category)
     }
 
     /// 收藏小节：按收藏时间倒序（设计共识），不受搜索外的高限约束。
@@ -115,6 +118,7 @@ struct PanelRootView: View {
         .onChange(of: controller.items) { _, _ in validateSelection() }
         .onChange(of: query) { _, _ in validateSelection() }
         .onChange(of: segment) { _, _ in validateSelection() }
+        .onChange(of: category) { _, _ in validateSelection() }
     }
 
     // MARK: - 搜索条
@@ -156,21 +160,9 @@ struct PanelRootView: View {
 
     // MARK: - Tab 条
 
-    /// All/Favorites 胶囊按钮 + 右侧结果计数。
+    /// 过滤条（结构见 PanelFilterBar；状态所有权留在本视图）。
     private var segmentBar: some View {
-        HStack(spacing: 4) {
-            ForEach(Segment.allCases) { value in
-                SegmentButton(segment: value, isSelected: segment == value) {
-                    segment = value
-                }
-            }
-            Spacer()
-            Text(itemCountLabel)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 8)
+        PanelFilterBar(segment: $segment, category: $category, itemCountLabel: itemCountLabel)
     }
 
     // MARK: - 内容区
@@ -188,7 +180,9 @@ struct PanelRootView: View {
         } else if flatItems.isEmpty {
             EmptyStateView(
                 title: "No matches",
-                subtitle: query.isEmpty ? "Nothing favorited yet." : "No items match “\(query)”."
+                subtitle: query.isEmpty
+                    ? (category == nil ? "Nothing favorited yet." : "Nothing in this category yet.")
+                    : "No items match “\(query)”."
             )
             .onAppear { listContentHeight = 0; reportPanelHeight() }
         } else {
@@ -353,13 +347,15 @@ struct PanelRootView: View {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let pureCommand = modifiers.subtracting([.command, .shift])
 
-        // Esc — 分层退出（设计共识）：预览 → 搜索词 → 收藏 Tab → 关面板。
+        // Esc — 分层退出（设计共识）：预览 → 搜索词 → 分类 → 收藏 Tab → 关面板。
         if event.keyCode == KeyCode.escape {
             if previewItem != nil {
                 withAnimation(.previewToggle) { previewItem = nil }
             } else if !query.isEmpty {
                 query = ""
                 searchFocused = false
+            } else if category != nil {
+                category = nil
             } else if segment == .favorites {
                 segment = .all
             } else {
@@ -393,9 +389,14 @@ struct PanelRootView: View {
             return nil
         }
 
-        // Tab — 全部/收藏 互换。
+        // Tab — 分类轮换（无分类 → JSON → Text → Links → Images → 无分类，
+        // 含空档所以键盘随时能清空）；⇧Tab — All/收藏互换（原 Tab 语义）。
         if event.keyCode == KeyCode.tab {
-            segment = segment == .all ? .favorites : .all
+            if modifiers.contains(.shift) {
+                segment = segment == .all ? .favorites : .all
+            } else {
+                category = ItemCategory.next(after: category)
+            }
             return nil
         }
 
@@ -454,20 +455,66 @@ struct PanelRootView: View {
     }
 }
 
-// MARK: - Tab 按钮
+// MARK: - 过滤条
 
-/// 胶囊样式的小号 Tab 按钮（选中填主色 14%，未选中仅次级文字）。
-private struct SegmentButton: View {
-    let segment: Segment
+/// 面板顶部的过滤条：All/Favorites Tab ┃ 分类 chips（单选，再点取消）+
+/// 右侧结果计数。发丝竖线分隔两组：Tab 互斥、分类与 Tab 正交叠加，
+/// 视觉上分开两轴。
+///
+/// 独立成 struct 供离屏宽度测量（PanelFilterBarWidthTests）：六个 chip +
+/// 计数贴着 520pt 面板宽的上限，装不下的回归要在这里红，而不是在真机
+/// 上把 chip 挤成截断。
+struct PanelFilterBar: View {
+    @Binding var segment: Segment
+    @Binding var category: ItemCategory?
+    let itemCountLabel: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Segment.allCases) { value in
+                ChipButton(title: value.title, symbol: value.symbol, isSelected: segment == value) {
+                    segment = value
+                }
+            }
+            Divider()
+                .glassHairline
+                .frame(height: 14)
+                .padding(.horizontal, 4)
+            ForEach(ItemCategory.allCases) { value in
+                ChipButton(title: value.title, symbol: nil, isSelected: category == value) {
+                    category = category == value ? nil : value
+                }
+            }
+            Spacer()
+            Text(itemCountLabel)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+}
+
+// MARK: - Chip 按钮
+
+/// 胶囊样式的小号按钮（Tab 与分类 chip 共用；选中填主色 14%，未选中仅次级文字）。
+/// symbol 为 nil = 纯文字 chip：分类四个 chip 不带图标（六个 chip + 计数
+/// 贴着 520pt 面板宽的上限，图标会挤破单行），同时与带图标的 Tab 按钮
+/// 形成两轴的视觉区分。
+private struct ChipButton: View {
+    let title: String
+    let symbol: String?
     let isSelected: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: segment.symbol)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(segment.title)
+                if let symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                Text(title)
                     .font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 10)

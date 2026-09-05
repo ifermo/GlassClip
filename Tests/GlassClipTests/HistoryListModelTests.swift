@@ -14,8 +14,9 @@ import XCTest
 final class HistoryListModelTests: XCTestCase {
 
     /// 条目工厂：只给过滤/排序真正关心的维度赋值。
-    private func item(_ id: UUID = UUID(), identity: String, search: String, favorite: Bool = false, favoriteAt: Date? = nil) -> ClipboardItem {
-        ClipboardItem(id: id, kind: .text, identity: identity, searchText: search, previewText: search,
+    private func item(_ id: UUID = UUID(), identity: String, search: String, favorite: Bool = false,
+                      favoriteAt: Date? = nil, kind: ClipboardKind = .text) -> ClipboardItem {
+        ClipboardItem(id: id, kind: kind, identity: identity, searchText: search, previewText: search,
                       appName: nil, appIconPath: nil, thumbnailPath: nil,
                       createdAt: Date(timeIntervalSince1970: 1000), favorite: favorite, favoriteAt: favoriteAt)
     }
@@ -69,6 +70,36 @@ final class HistoryListModelTests: XCTestCase {
         let c = item(identity: "c", search: "y", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
 
         XCTAssertEqual(identities(HistoryListModel.filtered(items: [a, b, c], query: "x", segment: .favorites)), ["a"])
+    }
+
+    // MARK: - 分类过滤
+
+    /// 分类与查询/收藏三轴 AND；互斥分区由分类器保证，这里钉过滤管线：
+    /// file/color 不属于任何分类（只在 All 出现），nil = 全量。
+    func testCategoryFilterNarrowsOnTopOfNothing() {
+        let plain = item(identity: "p", search: "hello")
+        let json = item(identity: "j", search: "{\"a\":1}")
+        let link = item(identity: "l", search: "https://example.com")
+        let image = item(identity: "i", search: "image", kind: .image)
+        let file = item(identity: "f", search: "/tmp/a", kind: .file)
+        let items = [plain, json, link, image, file]
+
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: .json)), ["j"])
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: .link)), ["l"])
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: .text)), ["p"])
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: .image)), ["i"])
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: nil)),
+                       ["p", "j", "l", "i", "f"], "无分类 = 不过滤")
+    }
+
+    /// 三轴叠加：收藏 Tab × 链接分类 = 收藏的链接。
+    func testCategoryStacksWithFavoritesSegment() {
+        let favLink = item(identity: "fl", search: "https://a.com", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
+        let plainLink = item(identity: "pl", search: "https://b.com")
+        let favText = item(identity: "ft", search: "note", favorite: true, favoriteAt: Date(timeIntervalSince1970: 1))
+
+        XCTAssertEqual(identities(HistoryListModel.filtered(items: [favLink, plainLink, favText],
+                                                            query: "", segment: .favorites, category: .link)), ["fl"])
     }
 
     // MARK: - 分小节

@@ -14,12 +14,15 @@ import Foundation
 enum HistoryListModel {
 
     /// 搜索 + Tab 过滤后的基础列表：搜索词命中 searchText 域
-    /// （大小写/本地化不敏感），收藏 Tab 再叠一层收藏过滤。
-    static func filtered(items: [ClipboardItem], query: String, segment: Segment) -> [ClipboardItem] {
+    /// （大小写/本地化不敏感），收藏 Tab 再叠一层收藏过滤，分类再叠一层
+    /// （三轴 AND；category 为 nil = 不过滤）。
+    static func filtered(items: [ClipboardItem], query: String, segment: Segment, category: ItemCategory? = nil) -> [ClipboardItem] {
         let base = query.isEmpty
             ? items
             : items.filter { $0.searchText.localizedCaseInsensitiveContains(query) }
-        return segment == .favorites ? base.filter(\.favorite) : base
+        let bySegment = segment == .favorites ? base.filter(\.favorite) : base
+        guard let category else { return bySegment }
+        return bySegment.filter { ItemCategory.classify($0) == category }
     }
 
     /// 收藏小节：按收藏时间倒序（设计共识），不受搜索外的高限约束。

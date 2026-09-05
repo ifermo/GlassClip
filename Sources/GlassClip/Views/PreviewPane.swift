@@ -35,9 +35,11 @@ struct PreviewPane: View {
     }
 
     /// 头部：类型标签 + "完整时间戳 · 来源应用"。
+    /// 标签派生分类优先：JSON/链接条目的 kind 仍是文本族，直接标 kind
+    /// 会与分类过滤视角自相矛盾；其余沿用 kind 标签。
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(item.kind.label)
+            Text(ItemCategory.classify(item)?.itemLabel ?? item.kind.label)
                 .font(.system(size: 12, weight: .semibold))
             Text(DateFormatting.full(item.createdAt) + (item.appName.map { " · \($0)" } ?? ""))
                 .font(.system(size: 10.5))
