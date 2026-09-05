@@ -79,6 +79,12 @@ actor HistoryDatabase {
     /// 数据库文件位置（仅存档用途，错误信息里带路径）。
     private let location: URL
 
+    /// items 表全部列名的单一来源（按 schema 顺序）：loadItems 的 SELECT
+    /// 与 insert 的 INTO 共用一份，加列时两处语句同步，拼错会在 prepare
+    /// 阶段爆掉而不是静默错位。顺序同时是 insert 的绑定序（bind 1…11
+    /// 与列一一对应），重排列名必须连绑定一起动。
+    private static let itemColumns = "id, identity, kind, search_text, preview_text, app_name, app_icon, thumbnail, created_at, favorite, favorite_at"
+
     /// 打开（必要时创建）数据库并确保 schema 就绪。
     ///
     /// - Throws: 目录创建失败或 `databaseOpenFailed` / `sqlite`。
@@ -252,8 +258,7 @@ actor HistoryDatabase {
     /// 丢弃整行——历史数据宁可显示异常也不凭空消失。
     func loadItems() throws -> [ClipboardItem] {
         let sql = """
-        SELECT id, identity, kind, search_text, preview_text, app_name, app_icon, thumbnail,
-               created_at, favorite, favorite_at
+        SELECT \(Self.itemColumns)
         FROM items ORDER BY created_at DESC
         """
         let stmt = try prepare(sql)
@@ -344,7 +349,7 @@ actor HistoryDatabase {
     /// - Throws: sqlite 错误（如主键冲突——正常流程不会发生，去重路径走 update）。
     func insert(item: ClipboardItem, payloads: [StoredPayload]) throws {
         let stmt = try prepare("""
-        INSERT INTO items (id, identity, kind, search_text, preview_text, app_name, app_icon, thumbnail, created_at, favorite, favorite_at)
+        INSERT INTO items (\(Self.itemColumns))
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """)
         defer { sqlite3_finalize(stmt) }
