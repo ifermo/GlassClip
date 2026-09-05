@@ -63,46 +63,39 @@ struct PanelRootView: View {
 
     // MARK: 派生列表
 
-    /// 搜索 + Tab + 分类过滤后的基础列表（逻辑见 HistoryListModel，逐字搬运）。
+    /// 搜索 + Tab + 分类过滤后的基础列表。
+    ///
+    /// 求值模型（2026-09-05 收口）：渲染路径在 body 里对本属性**单次求值**，
+    /// 小节/计数全部向下传递——历史实现里 favoriteItems/recentItems/计数
+    /// 各自独立触发一遍过滤，是搬运契约时代"刻意保持原样"的产物，②′
+    /// 完成后该约束已过时。非渲染路径（选中校验、键盘引擎）仍走 flatItems。
     private var filtered: [ClipboardItem] {
         HistoryListModel.filtered(items: controller.items, query: query, segment: segment, category: category)
     }
 
-    /// 收藏小节：按收藏时间倒序（设计共识），不受搜索外的高限约束。
-    private var favoriteItems: [ClipboardItem] {
-        HistoryListModel.favoriteItems(filtered)
-    }
-
-    /// 历史小节：非收藏、时间倒序；收藏 Tab 下为空（只显示收藏）。
-    private var recentItems: [ClipboardItem] {
-        HistoryListModel.recentItems(filtered, segment: segment)
-    }
-
     /// 键盘导航的一维顺序 = 收藏小节在前 + 历史小节在后（与视觉一致）。
+    /// 仅非渲染路径使用（选中校验、键盘引擎的 flatItemsProvider）。
     private var flatItems: [ClipboardItem] {
-        HistoryListModel.flatItems(favoriteItems: favoriteItems, recentItems: recentItems)
-    }
-
-    /// "3 items" 计数标签。filtered 会全表扫描，count 取一次存局部，
-    /// 单复数分支不再触发第二遍求值。
-    private var itemCountLabel: String {
-        let count = filtered.count
-        return "\(count) item\(count == 1 ? "" : "s")"
+        let base = filtered
+        return HistoryListModel.flatItems(
+            favoriteItems: HistoryListModel.favoriteItems(base),
+            recentItems: HistoryListModel.recentItems(base, segment: segment))
     }
 
     // MARK: 主体
 
     var body: some View {
-        VStack(spacing: 0) {
+        let base = filtered
+        return VStack(spacing: 0) {
             VStack(spacing: 0) {
                 searchBar
-                segmentBar
+                segmentBar(itemCount: base.count)
                 Divider().glassHairline
             }
             // chrome 高度实测（嵌套 VStack 与原扁平结构逐像素等价，
             // 仅为测量提供单一挂点）。
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chromeHeight = $0; reportPanelHeight() }
-            content
+            content(filtered: base)
         }
         // 材质与外观形状由 panelMaterial 双路径负责（26+ glassEffect /
         // 14/15 ultraThinMaterial，见 Formatting.swift 注释）——不要换回
@@ -161,23 +154,27 @@ struct PanelRootView: View {
     // MARK: - Tab 条
 
     /// 过滤条（结构见 PanelFilterBar；状态所有权留在本视图）。
-    private var segmentBar: some View {
-        PanelFilterBar(segment: $segment, category: $category, itemCountLabel: itemCountLabel)
+    private func segmentBar(itemCount: Int) -> some View {
+        PanelFilterBar(segment: $segment, category: $category, itemCount: itemCount)
     }
 
     // MARK: - 内容区
 
     /// 三态：全空（首次使用）→ 无匹配/无收藏 → 列表（+ 可选预览分栏）。
     /// 两个空态分支没有列表内容，上报 chrome 高度（钳位后落到 min）。
+    /// 收藏/历史小节与键盘一维序在这里各派生一次，随参数向下传递。
     @ViewBuilder
-    private var content: some View {
+    private func content(filtered base: [ClipboardItem]) -> some View {
+        let favorites = HistoryListModel.favoriteItems(base)
+        let recents = HistoryListModel.recentItems(base, segment: segment)
+        let flat = HistoryListModel.flatItems(favoriteItems: favorites, recentItems: recents)
         if controller.items.isEmpty {
             EmptyStateView(
                 title: "Nothing here yet",
                 subtitle: "Copy anything and it will show up here.\nPress the hotkey anytime to open GlassClip."
             )
             .onAppear { listContentHeight = 0; reportPanelHeight() }
-        } else if flatItems.isEmpty {
+        } else if flat.isEmpty {
             EmptyStateView(
                 title: "No matches",
                 subtitle: query.isEmpty
@@ -187,7 +184,7 @@ struct PanelRootView: View {
             .onAppear { listContentHeight = 0; reportPanelHeight() }
         } else {
             HStack(spacing: 0) {
-                listView
+                listView(favorites: favorites, recents: recents)
                 if let previewItem {
                     Divider().glassHairline
                     PreviewPane(item: previewItem, controller: controller)
@@ -200,23 +197,23 @@ struct PanelRootView: View {
 
     /// 历史列表：收藏小节置顶、发丝线分隔、LazyVStack 惰性渲染长列表。
     /// 选中行变化时滚动居中（键盘长距离导航时目标行始终可见）。
-    private var listView: some View {
+    private func listView(favorites: [ClipboardItem], recents: [ClipboardItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2, pinnedViews: []) {
-                    if !favoriteItems.isEmpty {
+                    if !favorites.isEmpty {
                         sectionHeader("Favorites")
-                        ForEach(favoriteItems) { item in
+                        ForEach(favorites) { item in
                             row(for: item)
                         }
-                        if !recentItems.isEmpty {
+                        if !recents.isEmpty {
                             Divider().glassHairline
                                 .padding(.vertical, 4)
                         }
                     }
-                    if !recentItems.isEmpty {
+                    if !recents.isEmpty {
                         sectionHeader("History")
-                        ForEach(recentItems) { item in
+                        ForEach(recents) { item in
                             row(for: item)
                         }
                     }
@@ -349,7 +346,8 @@ struct PanelRootView: View {
 struct PanelFilterBar: View {
     @Binding var segment: Segment
     @Binding var category: ItemCategory?
-    let itemCountLabel: String
+    /// 结果计数（单复数标签由本组件格式化；body 单次求值后传入）。
+    let itemCount: Int
 
     var body: some View {
         HStack(spacing: 4) {
@@ -368,7 +366,7 @@ struct PanelFilterBar: View {
                 }
             }
             Spacer()
-            Text(itemCountLabel)
+            Text("\(itemCount) item\(itemCount == 1 ? "" : "s")")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
         }

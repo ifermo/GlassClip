@@ -13,9 +13,9 @@ import XCTest
 @MainActor
 final class PanelFilterBarWidthTests: XCTestCase {
 
-    /// 计数取三位数量级（"999 items"）——历史最多时的最长态也要装得下。
+    /// 计数取三位数量级——历史最多时的最长态也要装得下。
     func testFilterBarFitsPanelWidth() {
-        let bar = PanelFilterBar(segment: .constant(.all), category: .constant(nil), itemCountLabel: "999 items")
+        let bar = PanelFilterBar(segment: .constant(.all), category: .constant(nil), itemCount: 999)
         let size = NSHostingView(rootView: bar).fittingSize
 
         XCTAssertGreaterThan(size.width, 0, "离屏测量应得到真实宽度（0 = 测量本身失效）")
