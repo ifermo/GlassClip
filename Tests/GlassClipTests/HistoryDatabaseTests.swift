@@ -1,27 +1,20 @@
-// HistoryDatabaseTests.swift — SQLite 持久化层回归测试（临时目录真库）。
+// HistoryDatabaseTests.swift — SQLite 持久化层回归测试（TestHarness 沙箱真库）。
 //
-// 策略：每个用例在临时目录开一个全新 HistoryDatabase，跑完即删，
-// 互不共享状态；覆盖读写往返、去重键查询、payload 替换保序、收藏、
-// 上限淘汰（收藏豁免）、清空保收藏、大 payload 文件路径往返。
+// 策略：每个用例经 TestHarness 沙箱开一个全新 HistoryDatabase（UUID 目录，
+// 用例结束由 harness 的 teardown 清理），互不共享状态；覆盖读写往返、
+// 去重键查询、payload 替换保序、收藏、上限淘汰（收藏豁免）、清空保收藏、
+// 大 payload 文件路径往返。
 // 同文件还包含 SensitiveAppsFilterTests（敏感名单匹配语义）。
 
 import AppKit
 import XCTest
 @testable import GlassClip
 
+@MainActor
 final class HistoryDatabaseTests: XCTestCase {
-    /// 本用例组的数据库路径（setUp 里按 UUID 生成，天然隔离）。
-    private var location: URL!
-
-    override func setUpWithError() throws {
-        location = FileManager.default
-            .temporaryDirectory
-            .appendingPathComponent("glassclip-tests-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("history.db")
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: location.deletingLastPathComponent())
+    /// 沙箱库：每个用例一个 UUID 目录，teardown 自动清理（TestHarness 基座）。
+    private func makeDatabase() throws -> HistoryDatabase {
+        try HistoryDatabase(location: makeSandboxBlobs().databaseURL)
     }
 
     /// 构造测试条目的工厂：全部字段给合理默认，用例只覆盖关心的维度。
@@ -50,7 +43,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// 插入一条（含 payload）→ 全量读回，字段逐一比对；
     /// 时间戳用固定值（700）验证 REAL 列精度无损。
     func testInsertAndLoadRoundtrip() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         let date = Date(timeIntervalSince1970: 700)
         let item = makeItem(createdAt: date)
         try await db.insert(
@@ -76,7 +69,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// 去重键查询：命中返回原 id，未命中返回 nil——
     /// 捕获管线"合并还是新建"分流依赖这一语义。
     func testIdentityLookup() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         let item = makeItem(identity: "i:abc123")
         try await db.insert(item: item, payloads: [])
         let found = try await db.uuidForIdentity("i:abc123")
@@ -88,7 +81,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// payload 全量替换：旧表示被清掉、新表示按传入顺序落位（pos 保序），
     /// 同一 UTI 只保留替换后的最新字节。
     func testReplacePayloadsMergesOrder() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         let item = makeItem()
         try await db.insert(item: item, payloads: [
             StoredPayload(uti: UTI.plainText, inline: Data("v1".utf8), filePath: nil),
@@ -105,7 +98,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// 收藏切换：收藏写入 favoriteAt（固定时间 999 验证精度），
     /// 取消收藏两列都要归零——favoriteAt 残留会污染收藏小节排序。
     func testFavoriteToggle() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         let item = makeItem()
         try await db.insert(item: item, payloads: [])
         let at = Date(timeIntervalSince1970: 999)
@@ -123,7 +116,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// 收藏豁免，最新的 2 条非收藏（3、4）保留，最旧的 2 条非收藏
     /// （1、2）被淘汰。用时间戳反查被删者，比比 id 更可读。
     func testLimitPrunesOldestNonFavorites() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         for index in 0..<5 {
             let item = makeItem(
                 identity: "t:\(index)",
@@ -145,7 +138,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// 普通条目（含 payload 行）全删。
     /// deleted.count == 0：收藏条目没有落盘文件，路径清单应为空。
     func testClearKeepsFavorites() async throws {
-        let db = try HistoryDatabase(location: location)
+        let db = try makeDatabase()
         let favorite = makeItem(identity: "t:fav", favorite: true)
         let normal = makeItem(identity: "t:normal")
         try await db.insert(item: favorite, payloads: [
@@ -168,7 +161,7 @@ final class HistoryDatabaseTests: XCTestCase {
     /// StoredPayload.data 惰性读盘，字节必须与原文完全一致。
     /// 这条锁住"库存路径、盘存字节"的存储分工不回退。
     func testLargePayloadFilePathRoundtrip() async throws {
-        let blobs = BlobStore(baseURL: location.deletingLastPathComponent().appendingPathComponent("Support"))
+        let blobs = makeSandboxBlobs()
         let bigData = Data(repeating: 0xAB, count: BlobStore.inlineThreshold + 100)
         let path = try blobs.writeLargePayload(bigData, id: UUID())
         let db = try HistoryDatabase(location: blobs.databaseURL)

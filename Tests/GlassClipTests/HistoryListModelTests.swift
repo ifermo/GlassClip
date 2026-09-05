@@ -13,14 +13,6 @@ import XCTest
 @MainActor
 final class HistoryListModelTests: XCTestCase {
 
-    /// 条目工厂：只给过滤/排序真正关心的维度赋值。
-    private func item(_ id: UUID = UUID(), identity: String, search: String, favorite: Bool = false,
-                      favoriteAt: Date? = nil, kind: ClipboardKind = .text) -> ClipboardItem {
-        ClipboardItem(id: id, kind: kind, identity: identity, searchText: search, previewText: search,
-                      appName: nil, appIconPath: nil, thumbnailPath: nil,
-                      createdAt: Date(timeIntervalSince1970: 1000), favorite: favorite, favoriteAt: favoriteAt)
-    }
-
     /// 按身份取回（断言"是哪几条"比断言 id 集合更可读）。
     private func identities(_ items: [ClipboardItem]) -> [String] {
         items.map(\.identity)
@@ -30,19 +22,15 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 空搜索词 = 全量原序（原序即 controller.items 的新→旧）。
     func testEmptyQueryKeepsAllItemsInOrder() {
-        let all = [item(identity: "a", search: "alpha"), item(identity: "b", search: "beta")]
+        let all = [makeClipboardItem(identity: "a", searchText: "alpha"), makeClipboardItem(identity: "b", searchText: "beta")]
         XCTAssertEqual(identities(HistoryListModel.filtered(items: all, query: "", segment: .all)), ["a", "b"])
     }
 
     /// 命中域是 searchText（不是 previewText）；大小写不敏感。
     /// 把匹配域换成 previewText 会静默改变搜索结果，这条就是防它。
     func testSearchMatchesSearchTextCaseInsensitively() {
-        let hit = ClipboardItem(id: UUID(), kind: .text, identity: "h", searchText: "hello world", previewText: "不同的一处",
-                                appName: nil, appIconPath: nil, thumbnailPath: nil,
-                                createdAt: Date(), favorite: false, favoriteAt: nil)
-        let miss = ClipboardItem(id: UUID(), kind: .text, identity: "m", searchText: "other", previewText: "hello world",
-                                 appName: nil, appIconPath: nil, thumbnailPath: nil,
-                                 createdAt: Date(), favorite: false, favoriteAt: nil)
+        let hit = makeClipboardItem(identity: "h", searchText: "hello world", previewText: "不同的一处")
+        let miss = makeClipboardItem(identity: "m", searchText: "other", previewText: "hello world")
 
         let result = HistoryListModel.filtered(items: [hit, miss], query: "HELLO", segment: .all)
         XCTAssertEqual(identities(result), ["h"], "只在 searchText 上匹配")
@@ -53,7 +41,7 @@ final class HistoryListModelTests: XCTestCase {
     /// "café résumé"，而 ASCII 写的 "resume"/"cafe" 命中不了。
     /// 换成 diacriticInsensitive 比较或 String.folding 会静默改变搜索结果集。
     func testSearchIsCaseInsensitiveButDiacriticSensitive() {
-        let items = [item(identity: "c", search: "café résumé")]
+        let items = [makeClipboardItem(identity: "c", searchText: "café résumé")]
 
         XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "CAFÉ", segment: .all)), ["c"],
                        "大小写（含音标形式的大写）不敏感")
@@ -65,9 +53,9 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 收藏 Tab = 在搜索结果之上再叠一层收藏过滤。
     func testFavoritesSegmentStacksOnTopOfSearch() {
-        let a = item(identity: "a", search: "x", favorite: true, favoriteAt: Date(timeIntervalSince1970: 1))
-        let b = item(identity: "b", search: "x")
-        let c = item(identity: "c", search: "y", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
+        let a = makeClipboardItem(identity: "a", searchText: "x", favorite: true, favoriteAt: Date(timeIntervalSince1970: 1))
+        let b = makeClipboardItem(identity: "b", searchText: "x")
+        let c = makeClipboardItem(identity: "c", searchText: "y", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
 
         XCTAssertEqual(identities(HistoryListModel.filtered(items: [a, b, c], query: "x", segment: .favorites)), ["a"])
     }
@@ -77,11 +65,11 @@ final class HistoryListModelTests: XCTestCase {
     /// 分类与查询/收藏三轴 AND；互斥分区由分类器保证，这里钉过滤管线：
     /// file/color 不属于任何分类（只在 All 出现），nil = 全量。
     func testCategoryFilterNarrowsOnTopOfNothing() {
-        let plain = item(identity: "p", search: "hello")
-        let json = item(identity: "j", search: "{\"a\":1}")
-        let link = item(identity: "l", search: "https://example.com")
-        let image = item(identity: "i", search: "image", kind: .image)
-        let file = item(identity: "f", search: "/tmp/a", kind: .file)
+        let plain = makeClipboardItem(identity: "p", searchText: "hello")
+        let json = makeClipboardItem(identity: "j", searchText: "{\"a\":1}")
+        let link = makeClipboardItem(identity: "l", searchText: "https://example.com")
+        let image = makeClipboardItem(kind: .image, identity: "i", searchText: "image")
+        let file = makeClipboardItem(kind: .file, identity: "f", searchText: "/tmp/a")
         let items = [plain, json, link, image, file]
 
         XCTAssertEqual(identities(HistoryListModel.filtered(items: items, query: "", segment: .all, category: .json)), ["j"])
@@ -94,9 +82,9 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 三轴叠加：收藏 Tab × 链接分类 = 收藏的链接。
     func testCategoryStacksWithFavoritesSegment() {
-        let favLink = item(identity: "fl", search: "https://a.com", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
-        let plainLink = item(identity: "pl", search: "https://b.com")
-        let favText = item(identity: "ft", search: "note", favorite: true, favoriteAt: Date(timeIntervalSince1970: 1))
+        let favLink = makeClipboardItem(identity: "fl", searchText: "https://a.com", favorite: true, favoriteAt: Date(timeIntervalSince1970: 2))
+        let plainLink = makeClipboardItem(identity: "pl", searchText: "https://b.com")
+        let favText = makeClipboardItem(identity: "ft", searchText: "note", favorite: true, favoriteAt: Date(timeIntervalSince1970: 1))
 
         XCTAssertEqual(identities(HistoryListModel.filtered(items: [favLink, plainLink, favText],
                                                             query: "", segment: .favorites, category: .link)), ["fl"])
@@ -106,9 +94,9 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 收藏小节按 favoriteAt 倒序（不是按捕获时间、不是按列表原序）。
     func testFavoriteSectionSortsByFavoriteAtDescending() {
-        let old = item(identity: "fav-old", search: "s", favorite: true, favoriteAt: Date(timeIntervalSince1970: 100))
-        let fresh = item(identity: "fav-new", search: "s", favorite: true, favoriteAt: Date(timeIntervalSince1970: 900))
-        let noDate = item(identity: "fav-nil", search: "s", favorite: true, favoriteAt: nil)
+        let old = makeClipboardItem(identity: "fav-old", searchText: "s", favorite: true, favoriteAt: Date(timeIntervalSince1970: 100))
+        let fresh = makeClipboardItem(identity: "fav-new", searchText: "s", favorite: true, favoriteAt: Date(timeIntervalSince1970: 900))
+        let noDate = makeClipboardItem(identity: "fav-nil", searchText: "s", favorite: true, favoriteAt: nil)
 
         let section = HistoryListModel.favoriteItems([old, noDate, fresh])
         XCTAssertEqual(identities(section), ["fav-new", "fav-old", "fav-nil"],
@@ -117,8 +105,8 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 历史小节 = 非收藏；收藏 Tab 下整节为空（只显示收藏）。
     func testRecentSectionExcludesFavoritesAndEmptiesInFavoritesTab() {
-        let fav = item(identity: "f", search: "s", favorite: true, favoriteAt: Date())
-        let plain = item(identity: "p", search: "s")
+        let fav = makeClipboardItem(identity: "f", searchText: "s", favorite: true, favoriteAt: Date())
+        let plain = makeClipboardItem(identity: "p", searchText: "s")
 
         XCTAssertEqual(identities(HistoryListModel.recentItems([fav, plain], segment: .all)), ["p"])
         XCTAssertTrue(HistoryListModel.recentItems([fav, plain], segment: .favorites).isEmpty)
@@ -126,8 +114,8 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 键盘导航的一维顺序：收藏小节在前、历史小节在后（与视觉一致）。
     func testFlatOrderPutsFavoritesBeforeHistory() {
-        let fav = item(identity: "f", search: "s", favorite: true, favoriteAt: Date())
-        let plain = item(identity: "p", search: "s")
+        let fav = makeClipboardItem(identity: "f", searchText: "s", favorite: true, favoriteAt: Date())
+        let plain = makeClipboardItem(identity: "p", searchText: "s")
         let filteredAll = [fav, plain]
 
         let flat = HistoryListModel.flatItems(
@@ -140,8 +128,8 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 未选中 / 选中已不在列表（被删或被过滤掉）→ 需要回落到首行。
     func testNeedsSelectionFallbackCoversNilAndMissingID() {
-        let a = item(identity: "a", search: "s")
-        let b = item(identity: "b", search: "s")
+        let a = makeClipboardItem(identity: "a", searchText: "s")
+        let b = makeClipboardItem(identity: "b", searchText: "s")
 
         XCTAssertTrue(HistoryListModel.needsSelectionFallback(nil, in: [a, b]))
         XCTAssertTrue(HistoryListModel.needsSelectionFallback(UUID(), in: [a, b]), "选中的行已消失")
@@ -151,7 +139,7 @@ final class HistoryListModelTests: XCTestCase {
 
     /// selectedItem：id 不在列表里返回 nil（行可能刚被删），不崩不误取。
     func testSelectedItemResolvesOrReturnsNil() {
-        let a = item(identity: "a", search: "s")
+        let a = makeClipboardItem(identity: "a", searchText: "s")
         XCTAssertEqual(HistoryListModel.selectedItem(a.id, in: [a])?.identity, "a")
         XCTAssertNil(HistoryListModel.selectedItem(nil, in: [a]))
         XCTAssertNil(HistoryListModel.selectedItem(UUID(), in: [a]))
@@ -163,8 +151,8 @@ final class HistoryListModelTests: XCTestCase {
     /// 无选中时按 ↓ 落到首行；按 ↑ 也落到首行（currentIndex 兜底为 -1，
     /// -1 + (-1) 被 max(0, …) 抬回 0）——键盘永远有落点。
     func testFirstArrowWithoutSelectionLandsOnHead() {
-        let a = item(identity: "a", search: "s")
-        let b = item(identity: "b", search: "s")
+        let a = makeClipboardItem(identity: "a", searchText: "s")
+        let b = makeClipboardItem(identity: "b", searchText: "s")
         let flat = [a, b]
 
         XCTAssertEqual(HistoryListModel.movedSelection(from: nil, in: flat, delta: 1), a.id)
@@ -173,9 +161,9 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 两端钳死：越界不循环（回绕会改变"到边界停住"的共识）。
     func testSelectionClampsAtBothEnds() {
-        let a = item(identity: "a", search: "s")
-        let b = item(identity: "b", search: "s")
-        let c = item(identity: "c", search: "s")
+        let a = makeClipboardItem(identity: "a", searchText: "s")
+        let b = makeClipboardItem(identity: "b", searchText: "s")
+        let c = makeClipboardItem(identity: "c", searchText: "s")
         let flat = [a, b, c]
 
         XCTAssertEqual(HistoryListModel.movedSelection(from: a.id, in: flat, delta: -1), a.id, "首行再往上不动")
@@ -185,8 +173,8 @@ final class HistoryListModelTests: XCTestCase {
 
     /// 多步移动与选中已消失时的行为：以 -1 为基准重头数。
     func testMoveWithMissingSelectionRestartsFromHead() {
-        let a = item(identity: "a", search: "s")
-        let b = item(identity: "b", search: "s")
+        let a = makeClipboardItem(identity: "a", searchText: "s")
+        let b = makeClipboardItem(identity: "b", searchText: "s")
         let flat = [a, b]
 
         XCTAssertEqual(HistoryListModel.movedSelection(from: UUID(), in: flat, delta: 1), a.id,
@@ -206,8 +194,8 @@ final class HistoryListModelTests: XCTestCase {
     /// 搜索结果作为 flat 源时，选中有效性与解析都以过滤后的列表为准——
     /// 这正是面板"改搜索词后选中不会跳到看不见的路"的机制。
     func testSelectionSemanticsFollowFilteredList() {
-        let kept = item(identity: "k", search: "visible")
-        let hidden = item(identity: "h", search: "hidden")
+        let kept = makeClipboardItem(identity: "k", searchText: "visible")
+        let hidden = makeClipboardItem(identity: "h", searchText: "hidden")
         let flat = HistoryListModel.filtered(items: [kept, hidden], query: "vis", segment: .all)
 
         XCTAssertEqual(identities(flat), ["k"])
