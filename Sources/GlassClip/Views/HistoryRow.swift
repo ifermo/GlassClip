@@ -125,19 +125,9 @@ private struct AppIconView: View {
                 .resizable()
                 .frame(width: 20, height: 20)
         } else {
-            Image(systemName: symbol)
+            Image(systemName: kind.fallbackSymbol)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    /// 无图标时的类型符号（文本/富文本/HTML 各有辨识度）。
-    private var symbol: String {
-        switch kind {
-        case .text: "doc.plaintext"
-        case .richText: "doc.richtext"
-        case .html: "curlybraces.square"
-        default: "doc"
         }
     }
 }

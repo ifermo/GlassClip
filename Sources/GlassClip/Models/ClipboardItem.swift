@@ -37,6 +37,19 @@ enum ClipboardKind: String, Codable, Sendable {
         case .color: "Color"
         }
     }
+
+    /// 无图标缓存时列表行的占位 SF Symbol（HistoryRow.AppIconView 消费）。
+    /// 与 label 同属"kind → 行表现"映射，收口同居一处。
+    /// image/file/color 三类行不走这条占位路径（各有专属标识视图），
+    /// 值沿用历史 default 分支的 "doc"。
+    var fallbackSymbol: String {
+        switch self {
+        case .text: "doc.plaintext"
+        case .richText: "doc.richtext"
+        case .html: "curlybraces.square"
+        case .image, .file, .color: "doc"
+        }
+    }
 }
 
 // MARK: - 历史条目
