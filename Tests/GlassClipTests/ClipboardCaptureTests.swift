@@ -154,5 +154,7 @@ final class RelativeTimeTests: XCTestCase {
         XCTAssertEqual(RelativeTime.format(now.addingTimeInterval(-3 * 3600), now: now), "3h")
         XCTAssertEqual(RelativeTime.format(now.addingTimeInterval(-1 * 86_400), now: now), "Yesterday")
         XCTAssertEqual(RelativeTime.format(now.addingTimeInterval(-5 * 86_400), now: now), "5d")
+        // 时钟偏差：date 在 now 之后（seconds 为负）也按 "now" 处理，不显示负数。
+        XCTAssertEqual(RelativeTime.format(now.addingTimeInterval(30), now: now), "now")
     }
 }

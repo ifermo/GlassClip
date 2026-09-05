@@ -100,13 +100,12 @@ enum RelativeTime {
     /// - Parameters:
     ///   - date: 目标时间。
     ///   - now: 参照"当前时间"，参数化以便测试注入固定时钟。
-    /// 阶梯：<1min "now"；<1h 分钟；<24h 小时；<7天 天数（恰好 1 天显示
-    /// "Yesterday"）；<330 天显示 "MMM d"；更老加年份。负值（时钟偏差）
-    /// 按 "now" 处理，不显示负数。
+    /// 阶梯：<1min "now"（含负值——时钟偏差时 date 在 now 之后，seconds
+    /// 为负，落进同一桶，不显示负数）；<1h 分钟；<24h 小时；<7天 天数
+    /// （恰好 1 天显示 "Yesterday"）；<330 天显示 "MMM d"；更老加年份。
     static func format(_ date: Date, now: Date = Date()) -> String {
         let seconds = now.timeIntervalSince(date)
         switch seconds {
-        case ..<0: return "now"
         case ..<60: return "now"
         case ..<3600: return "\(Int(seconds / 60))m"
         case ..<86_400:
