@@ -278,42 +278,43 @@ struct PanelRootView: View {
 
     // MARK: - 动作
 
-    /// 选中行有效性校验：选中不存在（被删/被过滤）或为空时，
-    /// 回落到列表首行——键盘操作永远有落点。
+    /// 键盘引擎（②′ 抽取，语义见 PanelKeyboardRouter）：状态经 Binding
+    /// 注入、派生列表与渲染同源；@State 所有权仍在本视图。
+    private var router: PanelKeyboardRouter {
+        PanelKeyboardRouter(
+            query: $query, segment: $segment, category: $category,
+            selectedID: $selectedID, previewItem: $previewItem,
+            // FocusState 的投影不是普通 Binding，包一层 get/set；引擎侧
+            // 因此可用普通 Binding 伪造（特征测试不依赖真实焦点存储）。
+            searchFocused: Binding(get: { searchFocused }, set: { searchFocused = $0 }),
+            controller: controller, onClose: onClose, flatItemsProvider: { flatItems }
+        )
+    }
+
+    /// NSEvent 本地监视器的入口。每次事件现构引擎：Binding 是存储句柄，
+    /// 构造只是打包句柄，成本可忽略。
+    private func routeKeyEvent(_ event: NSEvent) -> NSEvent? {
+        router.handleKeyEvent(event)
+    }
+
+    /// 选中行有效性校验（实现在 PanelKeyboardRouter）。
     private func validateSelection() {
-        if HistoryListModel.needsSelectionFallback(selectedID, in: flatItems) {
-            selectedID = flatItems.first?.id
-        }
+        router.validateSelection()
     }
 
-    /// 预览开关：同一行再按一次收起；打开时顺带把选中移到该行。
+    /// 预览开关（实现在 PanelKeyboardRouter）。
     private func togglePreview(_ item: ClipboardItem) {
-        if previewItem?.id == item.id {
-            withAnimation(.previewToggle) { previewItem = nil }
-        } else {
-            selectedID = item.id
-            withAnimation(.previewToggle) { previewItem = item }
-        }
+        router.togglePreview(item)
     }
 
-    /// 粘贴三连（Enter/菜单共用）：写剪贴板 → 关面板 → （可选）150ms 后
-    /// 合成 ⌘V。150ms 延迟是给"面板下屏、焦点回到原应用"留时间，
-    /// 否则 Auto Paste 的按键可能落进还没完全退场的面板。
+    /// 粘贴三连（实现在 PanelKeyboardRouter）。
     private func copyAndClose(_ item: ClipboardItem, plain: Bool) async {
-        await controller.copy(item, asPlainText: plain)
-        onClose()
-        if controller.settings.autoPaste {
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            AutoPaster.paste()
-        }
+        await router.copyAndClose(item, plain: plain)
     }
 
-    /// 删除行；若预览分栏正显示它，先收起预览避免悬空引用。
+    /// 删除行（实现在 PanelKeyboardRouter）。
     private func deleteItem(_ item: ClipboardItem) async {
-        if previewItem?.id == item.id {
-            previewItem = nil
-        }
-        await controller.delete(item)
+        await router.deleteItem(item)
     }
 
     // MARK: - 键盘
@@ -323,7 +324,7 @@ struct PanelRootView: View {
     private func installKeyMonitor() {
         removeKeyMonitor()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handleKeyEvent(event)
+            routeKeyEvent(event)
         }
     }
 
@@ -332,125 +333,6 @@ struct PanelRootView: View {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
-        }
-    }
-
-    /// 键盘语义表（设计共识）。返回 nil 表示事件已被消费；返回 event 表示
-    /// 放行（交给第一响应者，如搜索框的文本输入）。
-    ///
-    /// 守卫：只有面板是 key 窗口时才拦截，避免影响其他窗口。
-    /// `pureCommand` = 修饰键去掉 ⌘/⇧ 后的剩余部分，用于区分
-    /// "纯 ⌘/⇧ 组合"与"带 ⌃/⌥ 的组合"。
-    private func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
-        guard NSApp.keyWindow is GlassPanel else { return event }
-
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let pureCommand = modifiers.subtracting([.command, .shift])
-
-        // Esc — 分层退出（设计共识）：预览 → 搜索词 → 分类 → 收藏 Tab → 关面板。
-        if event.keyCode == KeyCode.escape {
-            if previewItem != nil {
-                withAnimation(.previewToggle) { previewItem = nil }
-            } else if !query.isEmpty {
-                query = ""
-                searchFocused = false
-            } else if category != nil {
-                category = nil
-            } else if segment == .favorites {
-                segment = .all
-            } else {
-                onClose()
-            }
-            return nil
-        }
-
-        // ↑↓ 移动选中（到边界停住），预览开着时跟随。
-        if event.keyCode == KeyCode.downArrow || event.keyCode == KeyCode.upArrow {
-            moveSelection(event.keyCode == KeyCode.downArrow ? 1 : -1)
-            return nil
-        }
-
-        // ⌘Enter / ⌘⇧Enter — 粘贴（加 ⇧ 为纯文本粘贴）。
-        if event.keyCode == KeyCode.return && pureCommand == modifiers && modifiers.contains(.command) {
-            let plain = modifiers.contains(.shift)
-            if let item = selectedItem {
-                Task { await copyAndClose(item, plain: plain) }
-                return nil
-            }
-        }
-
-        // Enter — 粘贴选中行；无选中则关闭面板。
-        if event.keyCode == KeyCode.return {
-            if let item = selectedItem {
-                Task { await copyAndClose(item, plain: false) }
-            } else {
-                onClose()
-            }
-            return nil
-        }
-
-        // Tab — 分类轮换（无分类 → JSON → Text → Links → Images → 无分类，
-        // 含空档所以键盘随时能清空）；⇧Tab — All/收藏互换（原 Tab 语义）。
-        if event.keyCode == KeyCode.tab {
-            if modifiers.contains(.shift) {
-                segment = segment == .all ? .favorites : .all
-            } else {
-                category = ItemCategory.next(after: category)
-            }
-            return nil
-        }
-
-        // Space — 预览开关（仅在搜索框为空时，避免与输入空格冲突）。
-        if event.keyCode == KeyCode.space && query.isEmpty {
-            if let item = selectedItem {
-                togglePreview(item)
-            }
-            return nil
-        }
-
-        // ⌫ — 删除选中行（仅在搜索框为空时，避免与改词冲突）。
-        if event.keyCode == KeyCode.delete && query.isEmpty {
-            if let item = selectedItem {
-                Task { await deleteItem(item) }
-                return nil
-            }
-        }
-
-        // 打即搜：无 ⌃/⌘ 修饰的可打印字符直接进搜索框（焦点不在框内也生效）。
-        // ⇧ 放行（大写字母），⌘/⌃ 组合放行给系统快捷键。
-        if pureCommand == modifiers, modifiers.isDisjoint(with: [.control, .command]),
-           let characters = event.characters, let first = characters.first,
-           isTypable(first)
-        {
-            if !searchFocused {
-                searchFocused = true
-            }
-            query.append(first)
-            return nil
-        }
-
-        return event
-    }
-
-    /// 字符是否可进搜索框：剔除控制字符（不可见字符/功能键的字符表示）。
-    private func isTypable(_ character: Character) -> Bool {
-        character.unicodeScalars.allSatisfy { scalar in
-            !CharacterSet.controlCharacters.contains(scalar)
-        }
-    }
-
-    /// 当前选中的条目（selectedID → flatItems 解析；行可能刚被删）。
-    private var selectedItem: ClipboardItem? {
-        HistoryListModel.selectedItem(selectedID, in: flatItems)
-    }
-
-    /// ↑↓ 移动选中：钳制在 [0, count-1]；预览开着时跟随选中刷新内容。
-    private func moveSelection(_ delta: Int) {
-        let items = flatItems
-        guard !items.isEmpty else { return }
-        selectedID = HistoryListModel.movedSelection(from: selectedID, in: items, delta: delta)
-        if previewItem != nil, let item = selectedItem {
-            previewItem = item
         }
     }
 }
