@@ -138,8 +138,18 @@ final class HistoryController: ObservableObject {
             let stored = await storePayloads(payloads, itemID: item.id)
             try? await database.updateMetadata(item)
             try? await database.replacePayloads(itemId: item.id, payloads: stored)
-            items.remove(at: index)
-            items.insert(item, at: 0)
+            // 上面三个 await 期间 items 可能被改写（另一条捕获插队、上限淘汰、
+            // 用户点 ★），await 之前算出的 index 与 item 副本都已过期：
+            // 直接用旧 index 做 remove 会摘错行，直接插回旧副本则会把过期的
+            // 收藏状态盖回内存（★ 复位、取消收藏失效）。因此重新定位下标，
+            // 并且 favorite/favoriteAt 以内存现状为准（它们只由
+            // toggleFavorite 写，捕获路径不是它们的所有者）。
+            guard let liveIndex = items.firstIndex(where: { $0.id == item.id }) else { return }
+            var merged = item
+            merged.favorite = items[liveIndex].favorite
+            merged.favoriteAt = items[liveIndex].favoriteAt
+            items.remove(at: liveIndex)
+            items.insert(merged, at: 0)
         } else {
             let item = ClipboardItem(
                 id: UUID(),
@@ -290,13 +300,24 @@ final class HistoryController: ObservableObject {
 
     /// 收藏/取消收藏（悬停 ★ 与右键菜单）。库先写，内存后同步；
     /// favoriteAt 只在收藏瞬间记录（收藏小节的排序键）。
-    func toggleFavorite(_ item: ClipboardItem) async {
-        let favorite = !item.favorite
-        try? await database.setFavorite(id: item.id, favorite: favorite, at: favorite ? Date() : nil)
-        if let index = items.firstIndex(where: { $0.id == item.id }) {
-            items[index].favorite = favorite
-            items[index].favoriteAt = favorite ? Date() : nil
-        }
+    ///
+    /// 只按 id 寻址、目标状态一律从 `items`（唯一事实源）现读现翻：
+    /// 调用方手里的 ClipboardItem 是某次渲染的快照，它一旦过期，
+    /// `!snapshot.favorite` 就会朝错误方向翻转——已收藏的行再点 ★ 仍被判成
+    /// "未收藏"，写回 favorite=1，表现为"取消不掉"，★ 也停在旧状态。
+    /// 快照里只有 id 是恒真的，所以入口只收 id。
+    func toggleFavorite(id: UUID) async {
+        guard let current = items.first(where: { $0.id == id }) else { return }
+        let favorite = !current.favorite
+        // 单次取时间：库与内存必须落到同一个 favorite_at，否则重启后
+        // 收藏小节的顺序会和会话内不一致。
+        let at = favorite ? Date() : nil
+        try? await database.setFavorite(id: id, favorite: favorite, at: at)
+        // await 期间 items 可能被捕获管线改写（新条目插队、上限淘汰），
+        // 下标必须重新定位，不能复用 await 之前的那个。
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].favorite = favorite
+        items[index].favoriteAt = at
     }
 
     /// 删除单条（⌫/右键菜单）：purge 全位置清理 + 内存移除。

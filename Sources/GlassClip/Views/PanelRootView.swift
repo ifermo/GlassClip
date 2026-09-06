@@ -108,7 +108,12 @@ struct PanelRootView: View {
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
         // 任何使列表变化的信号都要重新校验选中行（可能已滚出过滤结果）。
-        .onChange(of: controller.items) { _, _ in validateSelection() }
+        .onChange(of: controller.items) { _, _ in
+            validateSelection()
+            // 预览分栏持有的是条目快照，收藏/合并置顶/删除后必须换成新副本，
+            // 否则分栏一直停在旧值上（与列表里的 ★ 状态对不上）。
+            syncPreviewItem()
+        }
         .onChange(of: query) { _, _ in validateSelection() }
         .onChange(of: segment) { _, _ in validateSelection() }
         .onChange(of: category) { _, _ in validateSelection() }
@@ -248,11 +253,16 @@ struct PanelRootView: View {
 
     /// 单行 + 全部鼠标交互：单击选中、右键菜单（复制/粘贴/纯文本粘贴/
     /// 收藏/预览/删除）。.id(item.id) 供 ScrollViewReader 定位。
+    ///
+    /// 收藏动作只把 **id** 交给数据层，不交 item：闭包捕获的是某次渲染的
+    /// 快照，快照里的 favorite 一旦过期，取反就会朝错误方向翻转（已收藏的
+    /// 行点了 ★ 仍被判成未收藏），表现为"取消不掉"。id 恒真，目标状态由
+    /// 数据层按 items 现读现翻。
     private func row(for item: ClipboardItem) -> some View {
         HistoryRow(
             item: item,
             isSelected: item.id == selectedID,
-            onToggleFavorite: { Task { await controller.toggleFavorite(item) } }
+            onToggleFavorite: { Task { await controller.toggleFavorite(id: item.id) } }
         )
         .id(item.id)
         .contentShape(Rectangle())
@@ -263,7 +273,7 @@ struct PanelRootView: View {
             Button("Paste as Plain Text") { Task { await copyAndClose(item, plain: true) } }
             Divider()
             Button(item.favorite ? "Remove from Favorites" : "Add to Favorites") {
-                Task { await controller.toggleFavorite(item) }
+                Task { await controller.toggleFavorite(id: item.id) }
             }
             Button(previewItem?.id == item.id ? "Hide Preview" : "Preview") {
                 togglePreview(item)
@@ -297,6 +307,15 @@ struct PanelRootView: View {
     /// 选中行有效性校验（实现在 PanelKeyboardRouter）。
     private func validateSelection() {
         router.validateSelection()
+    }
+
+    /// 把预览分栏持有的条目快照换成 items 里的当前副本。
+    ///
+    /// 条目被删（或滚出列表）时快照无处可换，收起分栏——留着会显示一条
+    /// 已经不存在的记录。
+    private func syncPreviewItem() {
+        guard let id = previewItem?.id else { return }
+        previewItem = controller.items.first { $0.id == id }
     }
 
     /// 预览开关（实现在 PanelKeyboardRouter）。

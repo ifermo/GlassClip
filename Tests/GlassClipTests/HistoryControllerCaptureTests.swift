@@ -200,7 +200,7 @@ final class HistoryControllerCaptureTests: XCTestCase {
             await controller.handleCapture(textContent("n\(index)", identity: "t:n\(index)"), app: nil)
         }
         await controller.handleCapture(textContent("fav", identity: "t:fav"), app: nil)
-        await controller.toggleFavorite(try XCTUnwrap(controller.items.first(where: { $0.identity == "t:fav" })))
+        await controller.toggleFavorite(id: try XCTUnwrap(controller.items.first(where: { $0.identity == "t:fav" })).id)
         for index in 4...5 {
             await controller.handleCapture(textContent("n\(index)", identity: "t:n\(index)"), app: nil)
         }
@@ -245,7 +245,7 @@ final class HistoryControllerCaptureTests: XCTestCase {
         let controller = makeController()
         await controller.handleCapture(textContent("keep", identity: "t:keep"), app: nil)
         let favorite = try XCTUnwrap(controller.items.first)
-        await controller.toggleFavorite(favorite)
+        await controller.toggleFavorite(id: favorite.id)
         let big = Data(repeating: 0x22, count: BlobStore.inlineThreshold + 16)
         await controller.handleCapture(
             CapturedContent(kind: .text, identity: "t:gone", searchText: "gone", previewText: "gone",
@@ -266,7 +266,7 @@ final class HistoryControllerCaptureTests: XCTestCase {
     func testFavoriteStateSurvivesFreshDataLayer() async throws {
         let first = makeController()
         await first.handleCapture(textContent("pinned", identity: "t:pinned"), app: nil)
-        await first.toggleFavorite(try XCTUnwrap(first.items.first))
+        await first.toggleFavorite(id: try XCTUnwrap(first.items.first).id)
 
         let reopened = HistoryController(settings: makeIsolatedSettings(), blobs: blobs)
         let db = try HistoryDatabase(location: blobs.databaseURL)
@@ -275,6 +275,69 @@ final class HistoryControllerCaptureTests: XCTestCase {
         XCTAssertTrue(rows.first?.favorite ?? false)
         XCTAssertNotNil(rows.first?.favoriteAt, "收藏小节按 favorite_at 倒序，该列不能丢")
         XCTAssertTrue(reopened.items.isEmpty, "新 controller 未 start() 前内存列表为空（加载发生在 start）")
+    }
+
+    // MARK: - 收藏（回归：★ 取消不掉 / 状态与显示不符）
+
+    /// 回归：★ 的翻转必须以 items 现状为准，而不是调用方手里的快照。
+    ///
+    /// 旧签名 `toggleFavorite(_ item:)` 用 `!item.favorite` 定目标状态。视图
+    /// 闭包捕获的 ClipboardItem 只是某次渲染的快照，同一份快照连点两次 ★
+    /// 会两次都算出 favorite=true（第二次仍以为"当前未收藏"），写回库里还是
+    /// 1 —— 这就是"收藏之后无法取消收藏"，★ 也停在旧状态。
+    /// 新签名只收 id，目标状态由数据层按 items 现读现翻。
+    func testToggleFavoriteFlipsAgainstLiveStateNotCallerSnapshot() async throws {
+        let controller = makeController()
+        await controller.handleCapture(textContent("pinned", identity: "t:pinned"), app: nil)
+        let snapshot = try XCTUnwrap(controller.items.first)
+
+        await controller.toggleFavorite(id: snapshot.id)
+        XCTAssertTrue(controller.items.first?.favorite ?? false, "第一次点击 → 收藏")
+
+        // 关键：复用同一份（此刻已过期的）快照，只取它的恒真部分 id。
+        await controller.toggleFavorite(id: snapshot.id)
+        XCTAssertFalse(controller.items.first?.favorite ?? false, "第二次点击必须按现状翻转 → 取消收藏")
+        XCTAssertNil(controller.items.first?.favoriteAt, "取消收藏要把 favorite_at 归零，否则污染收藏小节排序")
+
+        let db = try HistoryDatabase(location: blobs.databaseURL)
+        let rows = try await db.loadItems()
+        XCTAssertFalse(rows.first?.favorite ?? false, "库与内存必须一致")
+        XCTAssertNil(rows.first?.favoriteAt)
+    }
+
+    /// 收藏时刻只取一次：库与内存必须是同一个 favorite_at。
+    /// 旧实现两次调用 Date()，会话内与重启后的收藏小节顺序可能对不上。
+    func testToggleFavoriteUsesOneTimestampForStoreAndMemory() async throws {
+        let controller = makeController()
+        await controller.handleCapture(textContent("pinned", identity: "t:pinned"), app: nil)
+        let id = try XCTUnwrap(controller.items.first).id
+
+        await controller.toggleFavorite(id: id)
+
+        let inMemory = try XCTUnwrap(controller.items.first(where: { $0.id == id })?.favoriteAt)
+        let db = try HistoryDatabase(location: blobs.databaseURL)
+        let rows = try await db.loadItems()
+        let stored = try XCTUnwrap(rows.first?.favoriteAt, "前置条件：库里应有该行")
+        XCTAssertEqual(inMemory.timeIntervalSince1970, stored.timeIntervalSince1970, accuracy: 0.001,
+                       "库与内存应是同一个收藏时刻")
+    }
+
+    /// 合并置顶不得把收藏状态盖回旧值：捕获路径不是 favorite 的所有者。
+    /// （库侧同语义由 HistoryDatabaseSemanticsTests 钉住，这里钉内存侧——
+    /// 列表与 ★ 直接读的是内存。）
+    func testMergeKeepsFavoriteInMemoryWhileReordering() async throws {
+        let controller = makeController()
+        await controller.handleCapture(textContent("first", identity: "t:first"), app: nil)
+        await controller.handleCapture(textContent("pinned", identity: "t:pinned"), app: nil)
+        let id = try XCTUnwrap(controller.items.first(where: { $0.identity == "t:pinned" })).id
+        await controller.toggleFavorite(id: id)
+
+        // 再拷一次同一内容 → 合并置顶（刷新 createdAt 并移到表头）。
+        await controller.handleCapture(textContent("pinned", identity: "t:pinned"), app: nil)
+
+        let merged = try XCTUnwrap(controller.items.first(where: { $0.id == id }))
+        XCTAssertTrue(merged.favorite, "合并后内存里的收藏状态必须存活")
+        XCTAssertNotNil(merged.favoriteAt, "收藏时刻同样不能被合并清掉")
     }
 
     // MARK: - 已知缺陷（冻结不修，按契约断言其存在）
