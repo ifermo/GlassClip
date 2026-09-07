@@ -1,6 +1,6 @@
 APP_NAME := GlassClip
 BUNDLE_ID := com.ken.glassclip
-VERSION := 0.1.0
+VERSION := 0.1.1
 BUILD_DIR := .build
 DIST_DIR := dist
 APP := $(DIST_DIR)/$(APP_NAME).app
