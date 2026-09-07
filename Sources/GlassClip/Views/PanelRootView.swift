@@ -232,8 +232,11 @@ struct PanelRootView: View {
             }
             .onChange(of: selectedID) { _, id in
                 guard let id else { return }
+                // 滚动目标 id 必须与行身份同源（都带小节命名空间），
+                // 否则收藏行会定位到不存在的裸 id 上。
+                let isFavorite = favorites.contains { $0.id == id }
                 withAnimation(.panelQuick) {
-                    proxy.scrollTo(id, anchor: .center)
+                    proxy.scrollTo(scrollID(id, isFavorite: isFavorite), anchor: .center)
                 }
             }
         }
@@ -251,6 +254,18 @@ struct PanelRootView: View {
             .padding(.bottom, 4)
     }
 
+    /// 行的滚动定位 id：按所属小节加命名空间。
+    ///
+    /// LazyVStack 以 id 做惰性子视图缓存。收藏/取消收藏会让同一条记录在
+    /// 历史小节与收藏小节之间迁移，若两个 ForEach 共用同一个裸 `item.id`，
+    /// LazyVStack 会把它判成"已存在的同一子视图"直接复用旧快照——行不
+    /// 重绘，★ 的新颜色要等到面板重建（重开窗口触发 setFrame/重布局）才
+    /// 显现。按小节限定身份后，跨小节迁移在 SwiftUI 眼里是"旧行销毁 +
+    /// 新行创建"，必然按最新数据重绘。
+    private func scrollID(_ id: UUID, isFavorite: Bool) -> String {
+        isFavorite ? "fav-\(id.uuidString)" : "his-\(id.uuidString)"
+    }
+
     /// 单行 + 全部鼠标交互：单击选中、右键菜单（复制/粘贴/纯文本粘贴/
     /// 收藏/预览/删除）。.id(item.id) 供 ScrollViewReader 定位。
     ///
@@ -264,7 +279,8 @@ struct PanelRootView: View {
             isSelected: item.id == selectedID,
             onToggleFavorite: { Task { await controller.toggleFavorite(id: item.id) } }
         )
-        .id(item.id)
+        // 行身份按小节限定（见 scrollID 注释）：跨小节迁移必须视为新视图。
+        .id(scrollID(item.id, isFavorite: item.favorite))
         .contentShape(Rectangle())
         .onTapGesture { selectedID = item.id }
         .contextMenu {
