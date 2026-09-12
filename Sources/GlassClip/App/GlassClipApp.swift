@@ -140,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
-    /// 状态栏模板图：36×36 px 资源按 18pt 呈现（@2x 视网膜下原分辨率渲染）。
+    /// 状态栏模板图：64×64 px 资源缩放到 18pt 呈现（远高于 @2x 所需的 36 px）。
     /// internal 供 StatusBarIconTests 钉住打包与模板属性。
     static func statusBarTemplateImage() -> NSImage? {
         guard let url = Bundle.module.url(forResource: "StatusBarIcon", withExtension: "png"),
